@@ -11,12 +11,10 @@ def install_packages( folders ):
             folder = folder + '/'
         for debfile in os.listdir( folder ):
             if debfile.endswith( ".deb" ):
-                package = apt.debfile.DebPackage( folder + debfile )
-                package.install()
+                subprocess.call(["dpkg","-i",debfile])
 
 def remove_packages( packages ):
     cache = apt.Cache()
     for package in packages:
-        pkg = cache[ package ]
-        pkg.mark_delete( auto_fix = True, purge = True )
+        subprocess.call(["dpkg","--purge",package])
     cache.commit()
