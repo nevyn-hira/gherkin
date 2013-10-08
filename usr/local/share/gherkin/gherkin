@@ -1,0 +1,316 @@
+#!/usr/bin/env python
+
+'''
+Notes for implementation:
+* Check settings in /etc/default/useradd - default shell was set to /bin/sh
+* Check the gherkin specific imports. This may provide choices for the ui
+  and package handler (assuming someone writes other ui's and package
+  handlers)
+* Change the clean up code...
+'''
+
+from shlex import shlex
+import glob
+import sys
+import os
+import re
+import csv
+import subprocess
+import shutil
+#import crypt        #only useful for python 3.3 and above for encrypting 
+                     #passwords
+import threading
+
+#gherkin specific
+from constants import *
+sys.path.append( sys.path[ 0 ] + '/ui' )
+sys.path.append( sys.path[ 0 ] + '/package_management' )
+import gtk2_gherkin_ui as ui        #change for different ui
+import deb_gherkin_handler as pm    #change for different package system
+
+PROGRESS_IMAGE='file:////usr/local/share/gherkin/assets/gherkin-inprogress.png'
+
+def logError( errorMessage ):
+    sys.stderr.write( errorMessage )
+
+def isCSVFile( variable ):
+    return ( re.search( "[a-zA-Z0-9_\-\/]*\.csv$", variable ) 
+            and os.path.exists(variable) )
+
+def isVariable( variable ):
+    return re.match( '^[A-Z][A-Z_-]*$', variable )
+
+def isCancel( testValue ):
+    return testValue == CANCEL_CODE
+
+class Point_Of_No_Return( threading.Thread ):
+    def __init__( self ):
+        threading.Thread.__init__( self )
+
+    def run( self, variables, userlist, installlist, removelist ):
+        #hack so that user isn't looking at an empty screen (given that I couldn't figure out threading)
+        subprocess.call( ['gsettings','set','org.gnome.desktop.background','picture-uri',PROGRESS_IMAGE] )
+
+        ui.update_working_dialogue( "Removing Packages" )
+        if removelist:
+            pm.remove_packages( removelist )
+        if installlist:
+            ui.update_working_dialogue( "Installing Packages" )
+            pm.install_packages( installlist )
+        if userlist:
+            ui.update_working_dialogue( "Adding Users" )
+            for user in userlist:
+                if ( len( user ) > 2 ):
+                    self.addUser( user[0], self.encryptPassword( user[ 1 ] ), ''.join( user[ 2: ] ) )
+                else:
+                    self.addUser( user[0], self.encryptPassword( user[ 1 ] ) )
+        #CLEAN UP - Change this to suit
+        #fix up lightdm (Wish there was a nicer way of doing this but autologin for root seemed to ignore .dmrc
+        f = open( '/etc/lightdm/lightdm.conf', 'w' )
+        f.write('[SeatDefaults]\nuser-session=ubuntu\ngreeter-session=unity-greeter\n')
+        f.close()
+        #Remove gherkin package
+        pm.remove_packages( ['gherkin'] )
+        #If I'm going to force a reboot, I might as well force ureadahead to reprofile as well while it's still
+        #seen as part of the set up process. Reboot has to be forced as lightdm doesn't seem to update sessions
+        #on logout. Lightdm could be restarted (not sure if this would change anything) BUT given the system
+        #needs to reprofile at some stage anyway....
+        for f in glob.glob( "/var/lib/ureadahead/*pack" ):
+            os.remove( f )
+        modelname = subprocess.check_output( ['dmidecode','-s','system-product-name'] ).split()[0]
+        host_name=userlist[0][0] + '-' + modelname
+        host_name=host_name.replace( " ", "" )
+        f = open( '/etc/hostname', 'w' )
+        f.write( userlist[0][0] + '-' + modelname )
+        f.close()
+        f = open( '/etc/hosts', 'a' )
+        f.write( "\n\n127.0.0.1\t\t" + host_name )
+        f.close()
+        subprocess.call( ['gsettings','reset','org.gnome.desktop.background','picture-uri'] )
+        subprocess.call( ["reboot"] )
+
+    def encryptPassword( self, password ):
+    #    if sys.version_info >= (3,3):
+    #        '''Use the crypt function which supports SHA-512 (and others)
+    #        from python 3.3 onwards... this is a stub for the future
+    #    else:
+            return subprocess.check_output( ['mkpasswd','--method=SHA-512',password ] ).strip()
+
+    def addUser( self, username, password, groups=DEFAULT_GROUPS ):
+        # I wonder... should specifying groups append to default groups rather
+        # than overwriting? Less control but kind of convenient.
+        subprocess.call( ["useradd", str(username), "-p", str(password), "--groups", str(groups) ] )
+
+class Definition():
+    def getOptions( self, optionspec, site_path ):
+        options = []
+        if isCSVFile( site_path + "/" + optionspec ):
+            csvfile = open( site_path + "" + optionspec, 'r' )
+            options = list ( csv.reader( csvfile ) )
+        else:
+            #sort out options
+            optionspec = optionspec.replace( '[[', '|' ).replace(']]','|')
+            lines = csv.reader( optionspec, quotechar='|' )
+            for line in lines:
+                if filter(None, line):
+                    options.append( line[0].split('],[' ) )
+        return options
+
+    def readDefinition( self, definitionFile ):
+        definition = []
+        f = open( definitionFile, 'r' )
+        for line in f:
+            if ( line[ 0 ].strip() != "#" ):
+                #remove comments
+                definition.append( list( shlex( line, False, True ) ) )
+        definition = filter( None, definition )
+        if ( definition[ 0 ][ 0 ] == "site_name" ):
+            #get rid of site_name - not needed for parsing
+            del definition[ 0 ]
+        return definition
+
+    def parseString( self, string ):
+        print string
+
+    def parse( self, definition, site_path ):
+        index = 0
+        userList = []
+        installList = []
+        removeList = []
+        variables = {}
+        displayPairs = []
+        canceled = False
+        while ( index < ( len( definition ) ) and not canceled ):
+            item = definition[ index ]
+            if ( item[ 0 ] == "get"):
+                title = item[ 3 ]
+                message = item[ 4 ]
+                variable_name = item[ 2 ]
+                if ( item[ 1 ] == "text" ):
+                    if ( len( item ) > 4 ):
+                        if item[ 5 ][ 0 ] != '^':
+                            item[ 5 ] = '^' + item[ 5 ]
+                        if item[ 5 ][ -1 ] != '$':
+                            item[ 5 ] = item[ 5 ] + '$'
+                        variables[ variable_name ] = ui.getText( title, message, item[ 5 ] )
+                        canceled = isCancel( variables[ variable_name ] )
+                        if ( len( item ) > 5 ):
+                            displayPairs.append([item[6], variable_name])
+                    else:
+                        variables[ variable_name ] = getText( title, message )
+                        canceled = isCancel( variables[ variable_name ] )
+                elif ( item[ 1 ] == "password" ):
+                    variables[ variable_name ] = ui.getPassword()
+                    canceled = isCancel( variables[ variable_name ] )                
+                elif ( item[ 1 ] == "multiselect" or item[ 1 ] == "singleselect" ):
+                    optionspec, additional = self.parseString( item[ 5: ] )
+                    options = self.getOptions( item[ 5 ], site_path )
+                    if ( len( item ) > 5 ):
+                        if item[6] == "True":
+                            canNull = True
+                        else:
+                            canNull = False                    
+                        if ( len( item ) > 6 ):
+                            displayPairs.append([item[7], variable_name])
+                    if ( item [ 1 ] == "multiselect" ):
+                        variables[ variable_name ] = ui.getMultipleSelection( title, message, options, canNull )
+                        
+                    else:
+                        variables[ variable_name ] = ui.getSingleSelection( title, message, options, canNull )
+                    canceled = isCancel( variables[ variable_name ] )
+            elif ( item[ 0 ] == "install" ):
+                if ( isVariable( item[ 1 ] ) ):
+                    if ( item[ 1 ] in variables ):
+                        installList.append( variables[ item[ 1 ] ] )
+                    else:
+                        logError( "Can not add " + item[ 1 ] +
+                                " to install list - variable not found" )
+                else:
+                    item=''.join( item[1:] )
+                    #absolute path
+                    if os.path.exists( item ):
+                        installList.append( item )
+                    else:
+                        logError( "Can not add " + definition[ index ][ 1 ].strip +
+                            " to install list - path not found (absolute)" )
+            elif ( item[ 0 ] == "set" ):
+                if ( isVariable( item[ 1 ] ) ):
+                    variables[ item[ 1 ] ] = item[ 2 ]
+                else:
+                    logError("Can not assign variable " + item[1] + 
+                            " as variable name does not conform to rules. " +
+                            "Variable names must start with a letter and only may contain " +
+                            "uppercase letters, underscores and dashes.")
+            elif ( item[ 0 ] == "remove"):
+                if isVariable( definition[ index ][ 1 ] ):
+                    removeList.append( variables[ definition[ index ][ 1 ] ] )
+                else:
+                    removeList.append( definition[ index ][ 1 ] )
+            elif ( item[ 0 ] == "adduser" ):
+                error = False
+                #adds to userList - doesn't do the actual install
+                if ( isVariable( item[ 1 ] ) ):
+                    #username is a variable
+                    if ( item[ 1 ] in variables ):
+                        username = variables[ item[ 1 ] ]
+                    else:
+                        logError( "Can not add user " + item[ 1 ] + ". Username variable not found." )
+                        error = True
+                else:
+                    username = item[ 1 ]
+
+                if ( not error ):
+                    if ( isVariable( item[2] ) ):
+                    #password is a variable
+                        if ( item[ 2 ] in variables ):
+                            password = variables[ item[ 2 ] ]
+                        else:
+                            logError( "Can not add user " + username + ". Password variable not found" +
+                                " (or literal password is all caps - not allowed" )
+                            error = True
+                    else:
+                        password = item[ 2 ]
+
+                groups = ""
+                if ( not error ):
+                    if ( len( item ) > 3 ):
+                        #groups specified
+                        if ( isVariable( item[ 3 ] ) ):
+                            if ( item[ 3 ] in variables ):
+                                groups = variables[ item[ 3 ] ]
+                            else:
+                                logError( "Can not add user " + username + 
+                                    ". Variable specified for groups. Variable not found." )
+                                error = True
+                        else:
+                            groups = ''.join(item[ 3: ])
+
+                if ( not error ):
+                    if ( groups != "" ):
+                        userList.append( [ username.lower(), password, groups ] )
+                    else:
+                        userList.append( [ username.lower(), password ] )
+
+            if ( item[ 0 ] == "if" and definition[ index + 1 ][ 0 ] == "{" ):
+                if ( evalCondition( definition[ index ], variables ) ):
+                    index = index + 2
+                    start = index
+                    openBracket = 1
+                    closeBracket = 0
+                    while ( openBracket != closeBracket ):
+                        if ( definition[ index ][ 0 ] == "{" ):
+                            openBracket = openBracket + 1
+                        elif ( definition[ index ][ 0 ] == "}" ):
+                            closeBracket = closeBracket + 1
+                        index = index + 1
+                    finish = index
+                    parse( definition[ start:finish ] )
+            else:
+                index = index+1
+        if canceled:
+            variables = CANCEL_CODE
+        print installList
+        return variables, userList, installList, removeList, displayPairs
+
+class Site():
+    def getSiteName( self, path ):
+        if os.path.exists( path + '/definition' ):
+            f = open( path + '/definition' )
+            line = f.readline()
+            f.close()
+            if ( line.strip().split( '=' )[ 0 ].strip() == "site_name" ):
+                return [ line.strip().split( '=' )[ 1 ].strip() , path ]
+            else:
+                return [ path.split('/')[ len( path.split( '/' ) ) -1 ], path ]
+        else:
+            return False
+
+    def getSiteNames( self ):
+        sites=[]
+        if os.path.exists( DEFINITIONS_FOLDER ):
+            for ( path, dirs, files ) in os.walk( DEFINITIONS_FOLDER ):
+                sites.append( self.getSiteName( path ) )
+                if sites[ len( sites ) - 1 ] == False:
+                    del sites[ len( sites ) - 1 ]
+        if ( sites == [] ):
+            logError( "Can not find any sites. Check definition folder." )
+        return sites
+
+def main():
+    variables = CANCEL_CODE
+    confirmed = False
+    while ( not confirmed ):
+        while ( isCancel( variables ) ):
+            site = Site()
+            siteDir = ui.getSite( site.getSiteNames() )
+            definition = Definition()
+            definitionContents =  definition.readDefinition( siteDir + '/definition' )
+            variables, userlist, installlist, removelist, displayPairs = definition.parse( definitionContents, siteDir )
+        confirmed = ui.getConfirmation( site.getSiteName( siteDir )[ 0 ], variables, displayPairs )
+        if not confirmed:
+            variables = CANCEL_CODE
+    ponr = Point_Of_No_Return()
+    ponr.run( variables, userlist, installlist, removelist )
+#    ui.show_working_dialogue()
+
+main()

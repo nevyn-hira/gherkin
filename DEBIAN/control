@@ -1,0 +1,9 @@
+Package: gherkin
+Version: 0.25~precise
+Section: admin
+Priority: optional
+Architecture: all
+Essential: no
+Depends: mutter
+Maintainer: Nevyn Hira <nevynh@gmail.com>
+Description: Sets up the system according to a user's/site's specifications.

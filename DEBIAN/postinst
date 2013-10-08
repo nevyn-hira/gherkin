@@ -1,0 +1,12 @@
+#!/bin/bash
+
+case "$1" in
+  configure)
+    ln -s /usr/local/share/gherkin/gherkin /usr/local/bin/gherkin
+    ln -s /usr/local/share/gherkin/gherkin-session /usr/local/bin/gherkin-session
+  ;;
+  remove|purge|upgrade)
+    rm /usr/local/bin/gherkin
+    rm /usr/local/bin/gherkin-session
+  ;;
+esac

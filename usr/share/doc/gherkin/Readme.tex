@@ -1,0 +1,86 @@
+\documentclass{article}
+\usepackage{times}
+\begin{document}
+\title{Gherkin}
+\section{Introduction}
+\setcounter{secnumdepth}{5}
+Gherkin is a piece of software to allow for provisioning a computer on first
+time boot. Essentially, it allows the distributor to ask the user a couple of
+questions and to set up a machine accordingly.\\
+It's original intent was to set up a computer depending on site. i.e.
+a computer could be customized to a particular school, building, department
+etc. but this would also work equally well for software selection.\\
+It's main power is in what it allows the distributor to do in that
+the distributor can write what is essentially a really simple "definition"
+file to tell it what to do and how to do it.
+\section{Deployment}
+Thus far gherkin has only been used on a deb based system and currently
+doesn't accomodate other packaging systems though it should be relatively
+trivial to make it do so.\\
+To use gherkin, you need to alter:\\
+\texttt{/usr/local/share/gherkin/constants.py}
+to suit your deployment.\\
+Sample:
+\begin{verbatim}
+#!/usr/bin/env python
+
+#CANCEL_CODE provides a 'code' for canceled dialogues.
+#It needs to be a value unlikely to ever be entered. By having it here, it allows
+#the UI components to use this constant as well as gherkin to use the same code to
+#test for a canceled diaglogue.
+CANCEL_CODE = "b748d7f9f3d5197c46052_120625a4550131d8 67049c13e11,02d.7?sa83a2e39b4ff"
+
+#Change these to individual need.
+#The title is probably a good place to have some sort of title as a grouping.
+SITE_SELECTION_DIALOGUE_TITLE = "Manaiakalani Schools"
+SITE_SELECTION_DIALOGUE_MESSAGE = "Select your school"
+SITE_SHOW_TEXT = "School"
+
+#Folder for definiton files
+DEFINITIONS_FOLDER = "/usr/local/share/gherkin/definitions"
+
+#Default Groups (when Groups not specified when adding users)
+DEFAULT_GROUPS="dialout,cdrom,dip,plugdev"
+
+#Don't change these. Bunch of constants that are used internally
+LEFT = 0
+RIGHT = 1
+TOP = 0
+BOTTOM = 1
+\end{verbatim}
+Follow the comments in the file. The ones of particular interest are:
+\begin{itemize}
+  \item SITE\_SELECTION\_DIALOGUE\_TITLE
+  \item SITE\_SELECTION\_DIALOGUE\_MESSAGE
+  \item SITE\_SHOW\_TEXT
+\end{itemize}
+You may also be interested in:
+\begin{itemize}
+  \item DEFAULT\_GROUPS
+  \item DEFINITIIONS\_FOLDER
+\end{itemize}
+You will need to use an xsession.desktop file. One has been included in:
+\begin{verbatim}
+/usr/share/xsessions
+\end{verbatim}
+The purpose of this file is to run gherkin, and only gherkin within
+an x-session. Running only gherkin leads to less complications i.e.
+the Window is less likely to disappear (though it's still possible).
+\subsection{Pre-Configuration}
+In the standard source tree you will find a file called \texttt{constants.py} in:\\
+\texttt{/usr/local/share/gherkin}
+\section{Definition Files}
+The definition files are designed to be really simple. The complexity is
+more in making up the packages for gherkin to use. However, making packages
+is outside of the scope of this documentation. It is my hope that such
+information can be put into a wiki at some stage.
+\subsection{Definition File}
+\subsubsection{Header}
+\paragraph{site\_name}
+Syntax:\\
+site\_name = [site name]\\
+Use this to set how this entity appears in the site selection screen. i.e.\\
+\texttt{site\_name = Main Building}
+\subsection{Get}
+\subsubsection{}
+\end{document}

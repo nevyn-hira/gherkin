@@ -1,0 +1,3 @@
+mutter &
+nautilus --no-default-window &
+sudo gherkin
